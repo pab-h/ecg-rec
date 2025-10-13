@@ -4,6 +4,10 @@ services:
     container_name: model
     restart: no
 
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
     volumes:
       - ./data:/app/data
       - ./dist:/app/dist
