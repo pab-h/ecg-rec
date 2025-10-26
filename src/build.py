@@ -146,22 +146,21 @@ if not os.path.exists(DIST_DIR):
     logger.warning("The dist folder does not exist. Creating")
     os.makedirs(DIST_DIR)
 
-figure, axes = plt.subplots(nrows = 1, ncols = 2)
-
 ## Loss x Epoch
+
+figure, axes = plt.subplots(nrows = 2, ncols = 1, figsize = (10, 8), sharex = True)
 
 axes[0].scatter(range(EPOCHS), trainingLoss, c = "blue", marker = "x")
 
 axes[0].set_title("Training Loss")
 
-axes[0].set_xlabel("Epoch")
 axes[0].set_ylabel("Loss")
 
 axes[0].grid()
 
 ## r2Score x Epoch
 
-axes[1].scatter(range(EPOCHS), trainingLoss, c = "red", marker = "x")
+axes[1].scatter(range(EPOCHS), r2Scores, c = "red", marker = "x")
 
 axes[1].set_title("Training R²")
 
