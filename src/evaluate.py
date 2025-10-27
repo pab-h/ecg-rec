@@ -43,6 +43,8 @@ randomLeadsDataset = Code15RandomLeadsDataset(
 
 datasetLen = len(randomLeadsDataset)
 
+print(BATCH_SIZE)
+
 dataloader = DataLoader(
     dataset     = randomLeadsDataset,
     batch_size  = BATCH_SIZE,
@@ -128,34 +130,42 @@ correlations = pd.DataFrame(
 
 model.eval()
 
+sampleIdx = 0 
+
 with torch.no_grad():
     for i, (X, Y) in enumerate(dataloader):
-        X, Y       =  X.to(device), Y.to(device)
-        prediction =  model(X)
 
-        prediction = prediction.cpu()[0]
-        Y 		   = Y.cpu()[0]
-        
-        r2Row   	   = []
-        correlationRow = []
+        X,          Y = X.to(device),   Y.to(device)
+        prediction, Y = model(X).cpu(), Y.cpu()
 
-        for j in range(len(ecgColumns)):
+        for j in range(X.size(0)): 
 
-            yTrue = Y[:, j].numpy()
-            yPred = prediction[:, j].numpy()
+            yTrue = Y[j].numpy()
+            yPred = prediction[j].numpy()
 
-            r2 = r2_score(yTrue, yPred)
+            r2Row   = []
+            corrRow = []
 
-            if np.std(yTrue) == 0 or np.std(yPred) == 0:
-                correlation = 0 
-            else:
-                correlation = pearsonr(yTrue, yPred).statistic
+            for k in range(len(ecgColumns)):
 
-            r2Row.append(r2)
-            correlationRow.append(correlation)
+                derivationTrue = yTrue[:, k]
+                derivationPred = yPred[:, k]
 
-        r2Scores.iloc[i]     = r2Row
-        correlations.iloc[i] = correlationRow
+                r2 = r2_score(derivationTrue, derivationPred)
+
+                if np.std(derivationTrue) == 0 or np.std(derivationPred) == 0:
+                    correlation = 0
+                else:
+                    correlation = pearsonr(derivationTrue, derivationPred).statistic
+
+                r2Row.append(r2)
+                corrRow.append(correlation)
+
+            r2Scores.iloc[sampleIdx]     = r2Row
+            correlations.iloc[sampleIdx] = corrRow
+
+            sampleIdx += 1
+
 
 logger.info(F"Saving the results to {DIST_DIR}")
 
