@@ -110,31 +110,36 @@ criterion = nn.MSELoss()
 trainingLoss = []
 r2Scores     = []
 
+numOfTrainBatches = len(trainDataloader)
+
 model.train()
 
 for epoch in range(EPOCHS):
 
-    loss    = 0
-    r2Score = 0
-
+    loss     = 0
+    r2Score  = 0
+    
     for X, Y in trainDataloader:
 
         X, Y = X.to(device), Y.to(device)
 
         prediction = model(X)
-        batchLoss  = criterion(prediction, Y)
+        batchLoss  = criterion(prediction, Y) 
 
         loss += batchLoss.item()
 
         YFlat          = Y.detach().cpu().flatten(0, 1).numpy()
         predictionFlat = prediction.detach().cpu().flatten(0, 1).numpy()
 
-        r2Score += r2_score(YFlat, predictionFlat) / trainSize
-
+        r2Score += r2_score(YFlat, predictionFlat) 
+        
         optimizer.zero_grad()
         batchLoss.backward()
         optimizer.step()
-
+    
+    loss    /= numOfTrainBatches
+    r2Score /= numOfTrainBatches
+    
     trainingLoss.append(loss)
     r2Scores.append(r2Score)
 
@@ -181,6 +186,8 @@ logger.info("Starting the evaluate!!")
 
 # The validation
 
+numOfTestBatches = len(testDataloader) 
+
 model.eval()
 
 testLoss    = 0
@@ -192,14 +199,17 @@ with torch.no_grad():
         X, Y =  X.to(device), Y.to(device)
           
         prediction =  model(X)
-        batchLoss  =  criterion(prediction, Y)
+        batchLoss  =  criterion(prediction, Y) 
           
         testLoss   += batchLoss.item()
-
+        
         YFlat          = Y.detach().cpu().flatten(0, 1).numpy()
         predictionFlat = prediction.detach().cpu().flatten(0, 1).numpy()
 
-        testR2Score += r2_score(YFlat, predictionFlat) / trainSize
+        testR2Score += r2_score(YFlat, predictionFlat)
+        
+testLoss    /= numOfTestBatches
+testR2Score /= numOfTestBatches
 
 logger.info(f"Validation - loss = {testLoss: .5f} r2 = {testR2Score: .5f}")
 
