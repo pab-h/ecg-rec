@@ -1,6 +1,6 @@
 services:
   ecg-rec:
-    build: .
+    image: pabhugo/ecg-rec:latest
     container_name: model
     restart: no
 
