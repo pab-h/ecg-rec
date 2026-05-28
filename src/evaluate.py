@@ -13,6 +13,7 @@ from Model            import ECGReconstructor
 from dotenv           import load_dotenv
 from scipy.stats      import pearsonr
 from sklearn.metrics  import r2_score
+from sklearn.metrics  import mean_absolute_error
 from utils            import plotECG
 from utils            import methodComparativePlot
 from utils            import comparativeFullEcgPlot
@@ -83,17 +84,17 @@ model = model.to(device)
 # Plot configurations
 
 ecgColumns = [
-    "LI", 
-    "LII", 
-    "LIII", 
-    "aVR", 
-    "aVL",
-    "aVF", 
+    "LI",
+    "aVR",
     "V1",
-    "V2",
-    "V3",
     "V4",
+    "LII",
+    "aVL",
+    "V2",
     "V5",
+    "LIII",
+    "aVF",
+    "V3",
     "V6"
 ]
 
@@ -128,6 +129,12 @@ correlations = pd.DataFrame(
     data    = np.zeros((datasetLen, len(ecgColumns)))
 )
 
+maeScores = pd.DataFrame(
+    columns = ecgColumns,
+    index   = range(datasetLen),
+    data    = np.zeros((datasetLen, len(ecgColumns)))
+)
+
 model.eval()
 
 sampleIdx = 0 
@@ -144,6 +151,7 @@ with torch.no_grad():
             yPred = prediction[j].numpy()
 
             r2Row   = []
+            maeRow  = []
             corrRow = []
 
             for k in range(len(ecgColumns)):
@@ -153,19 +161,22 @@ with torch.no_grad():
 
                 r2 = r2_score(derivationTrue, derivationPred)
 
+                mae = mean_absolute_error(derivationTrue, derivationPred)
+
                 if np.std(derivationTrue) == 0 or np.std(derivationPred) == 0:
                     correlation = 0
                 else:
                     correlation = pearsonr(derivationTrue, derivationPred).statistic
 
                 r2Row.append(r2)
+                maeRow.append(mae)
                 corrRow.append(correlation)
 
             r2Scores.iloc[sampleIdx]     = r2Row
+            maeScores.iloc[sampleIdx]    = maeRow
             correlations.iloc[sampleIdx] = corrRow
 
             sampleIdx += 1
-
 
 logger.info(F"Saving the results to {DIST_DIR}")
 
@@ -196,10 +207,62 @@ for derivation in ecgColumns:
     r2PlotPath   = os.path.join(DIST_DIR, 'metrics', f'R2 - {derivation}.png')
     r2PlotFigure.savefig(r2PlotPath)
 
-ecgChosen = np.random.choice(datasetLen, 3)
+    maePlotFigure = methodComparativePlot(maeScores, derivation, "MAE")
+    maePlotPath   = os.path.join(DIST_DIR, 'metrics', f'MAE - {derivation}.png')
+    maePlotFigure.savefig(maePlotPath)
+
+logger.info("Saving boxplots for each metric")
+
+logger.info("Saving violin plots for each metric")
+
+metrics = {
+    "MAE": maeScores,
+    "R2": r2Scores,
+    "CORR": correlations
+}
+
+for metricName, metricDF in metrics.items():
+
+    plt.figure(figsize=(12, 6))
+
+    data = [metricDF[col].dropna() for col in ecgColumns]
+
+    parts = plt.violinplot(
+        data,
+        showmeans=True,
+        showmedians=True,
+        showextrema=True
+    )
+
+    for pc in parts['bodies']:
+        pc.set_facecolor('lightblue')
+        pc.set_edgecolor('black')
+        pc.set_alpha(0.8)
+
+    if "cmedians" in parts:
+        parts['cmedians'].set_color('red')
+    if "cmeans" in parts:
+        parts['cmeans'].set_color('green')
+
+    plt.xticks(
+        ticks=range(1, len(ecgColumns) + 1),
+        labels=ecgColumns,
+        rotation=45
+    )
+
+    plt.title(f'{metricName} - Violin Plot por Derivação')
+    plt.ylabel(metricName)
+    plt.xlabel("Derivações")
+
+    violinPath = os.path.join(DIST_DIR, 'metrics', f"{metricName} - Violinplot.png")
+    plt.tight_layout()
+    plt.savefig(violinPath)
+    plt.close()
+
+
+ecgChosen = np.random.choice(datasetLen, 5)
 
 logger.info(F"Saving comparatives plots to {DIST_DIR}")
-
 
 for ecgId in ecgChosen:
 

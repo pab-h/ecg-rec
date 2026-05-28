@@ -4,29 +4,28 @@ class ECGReconstructor(nn.Module):
 
     def __init__(self, latentDim, hiddenDim):
         super().__init__()
-        
+
         self.encoder = nn.Sequential(
-            nn.Conv1d(12, 6, 5, padding = 2),
+            nn.Conv1d(12, hiddenDim, 5, stride=2, padding=2),
+            nn.BatchNorm1d(hiddenDim),
             nn.ReLU(),
-            nn.Conv1d(6, hiddenDim, 5, padding = 2),
-            nn.ReLU(),
-            nn.Conv1d(hiddenDim, latentDim, 5, padding = 2)
+
+            nn.Conv1d(hiddenDim, latentDim, 5, stride=2, padding=2),
+            nn.BatchNorm1d(latentDim),
+            nn.ReLU()
         )
-        
+
         self.decoder = nn.Sequential(
-            nn.Conv1d(latentDim, hiddenDim, 5, padding = 2),
+            nn.ConvTranspose1d(latentDim, hiddenDim, 4, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv1d(hiddenDim, 6, 5, padding = 2),
-            nn.ReLU(),
-            nn.Conv1d(6, 12, 5, padding = 2)
+
+            nn.ConvTranspose1d(hiddenDim, 12, 4, stride=2, padding=1),
         )
 
     def forward(self, x):
-        x = x.permute(0, 2, 1)  
+        x = x.permute(0, 2, 1)
+        z = self.encoder(x)
+        out = self.decoder(z)
+        return out.permute(0, 2, 1)
 
-        encoded = self.encoder(x) 
-        decoded = self.decoder(encoded)
-        decoded = decoded.permute(0, 2, 1)
-
-        return decoded
     
