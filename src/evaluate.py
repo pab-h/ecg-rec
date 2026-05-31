@@ -67,8 +67,11 @@ def load_config():
     }
 
 def create_dataset(data_folder, seed):
+
+    evaluate_file = os.listdir(data_folder)[-1]
+
     return Code15RandomLeadsDataset(
-        hdf5Files = os.listdir(data_folder),
+        hdf5Files = [evaluate_file],
         seed      = seed
     )
 
