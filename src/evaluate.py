@@ -274,21 +274,33 @@ def save_violin_plots(
         plt.savefig(output)
         plt.close()
 
-def save_random_ecgs(
+def save_best_and_worst_ecgs(
     model,
     dataset,
+    r2_scores,
     device,
     ecg_columns,
     ecg_colors,
-    exams_dir
+    exams_dir,
+    top_k = 5
 ):
 
-    ecg_ids = np.random.choice(
-        len(dataset),
-        5
-    )
+    mean_r2   = r2_scores.mean(axis=1)
 
-    for ecg_id in ecg_ids:
+    best_ids  = mean_r2.nlargest(top_k).index.tolist()
+    worst_ids = mean_r2.nsmallest(top_k).index.tolist()
+
+    selected_ecgs = [
+        ("BEST", ecg_id)
+        for ecg_id in best_ids
+    ] + [
+        ("WORST", ecg_id)
+        for ecg_id in worst_ids
+    ]
+
+    model.eval()
+
+    for category, ecg_id in selected_ecgs:
 
         sample_x, sample_y = dataset[ecg_id]
 
@@ -306,25 +318,27 @@ def save_random_ecgs(
 
         sample_ecg = pd.DataFrame(
             sample_y,
-            columns = ecg_columns
+            columns=ecg_columns
         )
 
         random_leads = pd.DataFrame(
             sample_x,
-            columns = ecg_columns
+            columns=ecg_columns
         )
 
         reconstructed = pd.DataFrame(
             prediction,
-            columns = ecg_columns
+            columns=ecg_columns
         )
+
+        mean_score = mean_r2.iloc[ecg_id]
 
         plotECG(
             sample_ecg,
             ecg_columns,
             ecg_colors
         ).savefig(
-            f"{exams_dir}/ECG - {ecg_id}.png"
+            f"{exams_dir}/{category} - ECG {ecg_id} - Original.png"
         )
 
         plotECG(
@@ -332,7 +346,7 @@ def save_random_ecgs(
             ecg_columns,
             ecg_colors
         ).savefig(
-            f"{exams_dir}/ECG - {ecg_id} - Random Lead.png"
+            f"{exams_dir}/{category} - ECG {ecg_id} - Input.png"
         )
 
         comparativeFullEcgPlot(
@@ -340,7 +354,7 @@ def save_random_ecgs(
             reconstructed,
             ecg_columns
         ).savefig(
-            f"{exams_dir}/ECG - {ecg_id} - Comparative.png"
+            f"{exams_dir}/{category} - ECG {ecg_id} - Comparative - R2={mean_score:.4f}.png"
         )
 
 def main():
@@ -416,9 +430,10 @@ def main():
         metrics_dir
     )
 
-    save_random_ecgs(
+    save_best_and_worst_ecgs(
         model,
         dataset,
+        r2_scores,
         device,
         ecgColumns,
         ecgPlotColors,
