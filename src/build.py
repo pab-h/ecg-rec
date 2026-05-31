@@ -34,9 +34,12 @@ def load_config():
 
 def create_dataset(data_folder, seed):
 
+    train_test_files = os.listdir(data_folder)
+    train_test_files = train_test_files[:-1]
+
     dataset = Code15RandomLeadsDataset(
-        hdf5Files=os.listdir(data_folder),
-        seed=seed
+        hdf5Files = train_test_files,
+        seed      = seed
     )
 
     return dataset
