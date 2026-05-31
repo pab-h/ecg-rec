@@ -18,71 +18,6 @@ from utils            import plotECG
 from utils            import methodComparativePlot
 from utils            import comparativeFullEcgPlot
 
-# Log config
-
-logging.config.fileConfig('logging.conf')
-
-logger = logging.getLogger()
-
-# Loading env
-
-load_dotenv()
-
-SEED        = int(os.environ.get("SEED"))
-DIST_DIR    = os.environ.get("DIST_DIR")
-BATCH_SIZE  = int(os.environ.get("BATCH_SIZE"))
-DATA_FOLDER = os.environ.get("DATA_FOLDER")
-
-# Define dataset
-
-logger.info("Define dataset and dataloaders")
-
-randomLeadsDataset = Code15RandomLeadsDataset(
-    hdf5Files  = os.listdir(DATA_FOLDER),
-    seed       = SEED
-)
-
-datasetLen = len(randomLeadsDataset)
-
-print(BATCH_SIZE)
-
-dataloader = DataLoader(
-    dataset     = randomLeadsDataset,
-    batch_size  = BATCH_SIZE,
-    shuffle     = False
-)
-
-logger.info(f"Dataset lenght is {datasetLen}")
-
-# Model definition
-
-logger.info("Loading and compiling the model")
-
-model = ECGReconstructor(
-    latentDim = 128,
-    hiddenDim = 32
-)
-
-model = torch.compile(model)
-
-modelPath = os.path.join(DIST_DIR, "model.pth")
-
-model.load_state_dict(
-    torch.load(modelPath, weights_only = True)
-)
-
-# GPU things
-
-logger.info("Checking if the GPU is available")
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-logger.info(f"Device = {device}")
-
-model = model.to(device)
-
-# Plot configurations
-
 ecgColumns = [
     "LI",
     "aVR",
@@ -113,189 +48,379 @@ ecgPlotColors = {
     "V6":   "crimson"
 }
 
-# Evaluate
+def setup_logger():
 
-logger.info("Starting the evaluation")
+    logging.config.fileConfig("logging.conf")
 
-r2Scores = pd.DataFrame(
-    columns = ecgColumns,
-    index   = range(datasetLen),
-    data    = np.zeros((datasetLen, len(ecgColumns)))
-)
+    return logging.getLogger()
 
-correlations = pd.DataFrame(
-    columns = ecgColumns,
-    index   = range(datasetLen),
-    data    = np.zeros((datasetLen, len(ecgColumns)))
-)
 
-maeScores = pd.DataFrame(
-    columns = ecgColumns,
-    index   = range(datasetLen),
-    data    = np.zeros((datasetLen, len(ecgColumns)))
-)
+def load_config():
 
-model.eval()
+    load_dotenv()
 
-sampleIdx = 0 
+    return {
+        "seed":        int(os.environ["SEED"]),
+        "dist_dir":    os.environ["DIST_DIR"],
+        "batch_size":  int(os.environ["BATCH_SIZE"]),
+        "data_folder": os.environ["DATA_FOLDER"],
+    }
 
-with torch.no_grad():
-    for i, (X, Y) in enumerate(dataloader):
-
-        X,          Y = X.to(device),   Y.to(device)
-        prediction, Y = model(X).cpu(), Y.cpu()
-
-        for j in range(X.size(0)): 
-
-            yTrue = Y[j].numpy()
-            yPred = prediction[j].numpy()
-
-            r2Row   = []
-            maeRow  = []
-            corrRow = []
-
-            for k in range(len(ecgColumns)):
-
-                derivationTrue = yTrue[:, k]
-                derivationPred = yPred[:, k]
-
-                r2 = r2_score(derivationTrue, derivationPred)
-
-                mae = mean_absolute_error(derivationTrue, derivationPred)
-
-                if np.std(derivationTrue) == 0 or np.std(derivationPred) == 0:
-                    correlation = 0
-                else:
-                    correlation = pearsonr(derivationTrue, derivationPred).statistic
-
-                r2Row.append(r2)
-                maeRow.append(mae)
-                corrRow.append(correlation)
-
-            r2Scores.iloc[sampleIdx]     = r2Row
-            maeScores.iloc[sampleIdx]    = maeRow
-            correlations.iloc[sampleIdx] = corrRow
-
-            sampleIdx += 1
-
-logger.info(F"Saving the results to {DIST_DIR}")
-
-if not os.path.exists(DIST_DIR):
-
-    logger.warning("The dist folder does not exist. Creating")
-    os.makedirs(DIST_DIR, exist_ok = True)
-
-if not os.path.exists(DIST_DIR + "/metrics"):
-
-    logger.warning("The metrics folder does not exist. Creating")
-    os.makedirs(DIST_DIR + "/metrics", exist_ok = True)
-
-if not os.path.exists(DIST_DIR + "/exams"):
-
-    logger.warning("The exams folder does not exist. Creating")
-    os.makedirs(DIST_DIR + "/exams", exist_ok = True)
-
-for derivation in ecgColumns:
-
-    logger.info(f"Saving the results of {derivation}")
-
-    corrPlotFigure = methodComparativePlot(correlations, derivation, "CORR")
-    corrPlotPath   = os.path.join(DIST_DIR, 'metrics', f'CORR - {derivation}.png')
-    corrPlotFigure.savefig(corrPlotPath)
-
-    r2PlotFigure = methodComparativePlot(r2Scores, derivation, "R^2")
-    r2PlotPath   = os.path.join(DIST_DIR, 'metrics', f'R2 - {derivation}.png')
-    r2PlotFigure.savefig(r2PlotPath)
-
-    maePlotFigure = methodComparativePlot(maeScores, derivation, "MAE")
-    maePlotPath   = os.path.join(DIST_DIR, 'metrics', f'MAE - {derivation}.png')
-    maePlotFigure.savefig(maePlotPath)
-
-logger.info("Saving boxplots for each metric")
-
-logger.info("Saving violin plots for each metric")
-
-metrics = {
-    "MAE": maeScores,
-    "R2": r2Scores,
-    "CORR": correlations
-}
-
-for metricName, metricDF in metrics.items():
-
-    plt.figure(figsize=(12, 6))
-
-    data = [metricDF[col].dropna() for col in ecgColumns]
-
-    parts = plt.violinplot(
-        data,
-        showmeans=True,
-        showmedians=True,
-        showextrema=True
+def create_dataset(data_folder, seed):
+    return Code15RandomLeadsDataset(
+        hdf5Files = os.listdir(data_folder),
+        seed      = seed
     )
 
-    for pc in parts['bodies']:
-        pc.set_facecolor('lightblue')
-        pc.set_edgecolor('black')
-        pc.set_alpha(0.8)
 
-    if "cmedians" in parts:
-        parts['cmedians'].set_color('red')
-    if "cmeans" in parts:
-        parts['cmeans'].set_color('green')
-
-    plt.xticks(
-        ticks=range(1, len(ecgColumns) + 1),
-        labels=ecgColumns,
-        rotation=45
+def create_dataloader(dataset, batch_size):
+    return DataLoader(
+        dataset    = dataset,
+        batch_size = batch_size,
+        shuffle    = False
     )
 
-    plt.title(f'{metricName} - Violin Plot por Derivação')
-    plt.ylabel(metricName)
-    plt.xlabel("Derivações")
+def load_model(dist_dir, device):
 
-    violinPath = os.path.join(DIST_DIR, 'metrics', f"{metricName} - Violinplot.png")
-    plt.tight_layout()
-    plt.savefig(violinPath)
-    plt.close()
+    model = ECGReconstructor(
+        latentDim = 128,
+        hiddenDim = 32
+    )
 
+    model = torch.compile(model)
 
-ecgChosen = np.random.choice(datasetLen, 5)
+    model_path = os.path.join(dist_dir, "model.pth")
 
-logger.info(F"Saving comparatives plots to {DIST_DIR}")
+    model.load_state_dict(
+        torch.load(
+            model_path,
+            weights_only=True
+        )
+    )
 
-for ecgId in ecgChosen:
+    return model.to(device)
 
-    logger.info(f"Saving the results of {ecgId}")
-    sampleX, sampleY = randomLeadsDataset[ecgId]
+def create_output_folders(dist_dir):
+
+    metrics_dir = os.path.join(dist_dir, "metrics")
+    exams_dir   = os.path.join(dist_dir, "exams")
+
+    os.makedirs(metrics_dir, exist_ok=True)
+    os.makedirs(exams_dir, exist_ok=True)
+
+    return metrics_dir, exams_dir
+
+def calculate_metrics(y_true, y_pred):
+
+    r2_row   = []
+    mae_row  = []
+    corr_row = []
+
+    for k in range(y_true.shape[1]):
+
+        derivation_true = y_true[:, k]
+        derivation_pred = y_pred[:, k]
+
+        r2_row.append(
+            r2_score(
+                derivation_true,
+                derivation_pred
+            )
+        )
+
+        mae_row.append(
+            mean_absolute_error(
+                derivation_true,
+                derivation_pred
+            )
+        )
+
+        if (
+            np.std(derivation_true) == 0 or
+            np.std(derivation_pred) == 0
+        ):
+            corr = 0
+        else:
+            corr = pearsonr(
+                derivation_true,
+                derivation_pred
+            ).statistic
+
+        corr_row.append(corr)
+
+    return r2_row, mae_row, corr_row
+
+def evaluate_dataset(
+    model,
+    dataloader,
+    dataset_len,
+    ecg_columns,
+    device
+):
+
+    r2_scores = pd.DataFrame(
+        np.zeros((dataset_len, len(ecg_columns))),
+        columns = ecg_columns
+    )
+
+    mae_scores = pd.DataFrame(
+        np.zeros((dataset_len, len(ecg_columns))),
+        columns = ecg_columns
+    )
+
+    correlations = pd.DataFrame(
+        np.zeros((dataset_len, len(ecg_columns))),
+        columns = ecg_columns
+    )
+
+    sample_idx = 0
+
+    model.eval()
 
     with torch.no_grad():
-        prediction = model(sampleX.unsqueeze(0).to(device))\
-            .squeeze(0)\
-            .cpu()\
-            .numpy()
-        
-    sampleECG              = pd.DataFrame(sampleY,    columns = ecgColumns)
-    sampleRandomLeadECG    = pd.DataFrame(sampleX,    columns = ecgColumns)
-    sampleECGReconstructed = pd.DataFrame(prediction, columns = ecgColumns)
 
-    sampleECGFigure = plotECG(
-        sampleECG, 
-        ecgColumns, 
-        ecgPlotColors
-    )
-    sampleECGFigure.savefig(f"{DIST_DIR}/exams/ECG - {ecgId}.png")
+        for X, Y in dataloader:
 
-    sampleRandomLeadECGFigure = plotECG(
-        sampleRandomLeadECG, 
-        ecgColumns, 
-        ecgPlotColors
-    )
-    sampleRandomLeadECGFigure.savefig(f"{DIST_DIR}/exams/ECG - {ecgId} - Random Lead.png")
+            X = X.to(device)
 
-    comparativeFullEcgPlotFigure = comparativeFullEcgPlot(
-        sampleECG,
-        sampleECGReconstructed,
-        ecgColumns
+            prediction = model(X).cpu()
+            Y          = Y.cpu()
+
+            for i in range(X.size(0)):
+
+                r2_row, mae_row, corr_row = (
+                    calculate_metrics(
+                        Y[i].numpy(),
+                        prediction[i].numpy()
+                    )
+                )
+
+                r2_scores.iloc[sample_idx]    = r2_row
+                mae_scores.iloc[sample_idx]   = mae_row
+                correlations.iloc[sample_idx] = corr_row
+
+                sample_idx += 1
+
+    return (
+        r2_scores,
+        mae_scores,
+        correlations
     )
-    comparativeFullEcgPlotFigure.savefig(f"{DIST_DIR}/exams/ECG - {ecgId} - Comparative.png")
+
+def save_metric_plots(
+    metric_df,
+    metric_name,
+    ecg_columns,
+    metrics_dir
+):
+
+    for derivation in ecg_columns:
+
+        figure = methodComparativePlot(
+            metric_df,
+            derivation,
+            metric_name
+        )
+
+        output = os.path.join(
+            metrics_dir,
+            f"{metric_name} - {derivation}.png"
+        )
+
+        figure.savefig(output)
+
+def save_violin_plots(
+    metrics,
+    ecg_columns,
+    metrics_dir
+):
+
+    for metric_name, metric_df in metrics.items():
+
+        plt.figure(figsize=(12, 6))
+
+        data = [
+            metric_df[col].dropna()
+            for col in ecg_columns
+        ]
+
+        plt.violinplot(
+            data,
+            showmeans   = True,
+            showmedians = True,
+            showextrema = True
+        )
+
+        plt.xticks(
+            range(1, len(ecg_columns) + 1),
+            ecg_columns,
+            rotation = 45
+        )
+
+        plt.title(
+            f"{metric_name} - Violin Plot por Derivação"
+        )
+
+        plt.tight_layout()
+
+        output = os.path.join(
+            metrics_dir,
+            f"{metric_name} - Violinplot.png"
+        )
+
+        plt.savefig(output)
+        plt.close()
+
+def save_random_ecgs(
+    model,
+    dataset,
+    device,
+    ecg_columns,
+    ecg_colors,
+    exams_dir
+):
+
+    ecg_ids = np.random.choice(
+        len(dataset),
+        5
+    )
+
+    for ecg_id in ecg_ids:
+
+        sample_x, sample_y = dataset[ecg_id]
+
+        with torch.no_grad():
+
+            prediction = (
+                model(
+                    sample_x.unsqueeze(0)
+                    .to(device)
+                )
+                .squeeze(0)
+                .cpu()
+                .numpy()
+            )
+
+        sample_ecg = pd.DataFrame(
+            sample_y,
+            columns = ecg_columns
+        )
+
+        random_leads = pd.DataFrame(
+            sample_x,
+            columns = ecg_columns
+        )
+
+        reconstructed = pd.DataFrame(
+            prediction,
+            columns = ecg_columns
+        )
+
+        plotECG(
+            sample_ecg,
+            ecg_columns,
+            ecg_colors
+        ).savefig(
+            f"{exams_dir}/ECG - {ecg_id}.png"
+        )
+
+        plotECG(
+            random_leads,
+            ecg_columns,
+            ecg_colors
+        ).savefig(
+            f"{exams_dir}/ECG - {ecg_id} - Random Lead.png"
+        )
+
+        comparativeFullEcgPlot(
+            sample_ecg,
+            reconstructed,
+            ecg_columns
+        ).savefig(
+            f"{exams_dir}/ECG - {ecg_id} - Comparative.png"
+        )
+
+def main():
+
+    logger = setup_logger()
+    config = load_config()
+
+    device = torch.device(
+        "cuda"
+        if torch.cuda.is_available()
+        else "cpu"
+    )
+
+    dataset = create_dataset(
+        config["data_folder"],
+        config["seed"]
+    )
+
+    dataloader = create_dataloader(
+        dataset,
+        config["batch_size"]
+    )
+
+    model = load_model(
+        config["dist_dir"],
+        device
+    )
+
+    metrics_dir, exams_dir = (
+        create_output_folders(
+            config["dist_dir"]
+        )
+    )
+
+    r2_scores, mae_scores, correlations = (
+        evaluate_dataset(
+            model,
+            dataloader,
+            len(dataset),
+            ecgColumns,
+            device
+        )
+    )
+
+    save_metric_plots(
+        correlations,
+        "CORR",
+        ecgColumns,
+        metrics_dir
+    )
+
+    save_metric_plots(
+        r2_scores,
+        "R2",
+        ecgColumns,
+        metrics_dir
+    )
+
+    save_metric_plots(
+        mae_scores,
+        "MAE",
+        ecgColumns,
+        metrics_dir
+    )
+
+    save_violin_plots(
+        {
+            "MAE": mae_scores,
+            "R2": r2_scores,
+            "CORR": correlations
+        },
+        ecgColumns,
+        metrics_dir
+    )
+
+    save_random_ecgs(
+        model,
+        dataset,
+        device,
+        ecgColumns,
+        ecgPlotColors,
+        exams_dir
+    )
+
+if __name__ == "__main__":
+    main()

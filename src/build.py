@@ -1,220 +1,263 @@
-import torch
 import os
-
-from torch.utils.data import DataLoader
-from torch.utils.data import random_split
-from sklearn.metrics  import r2_score
-from dotenv           import load_dotenv
-from Dataset          import Code15RandomLeadsDataset
-from Model            import ECGReconstructor
-
-import matplotlib.pyplot as plt
-import torch.nn          as nn
-
 import logging
 import logging.config
 
+import torch
+import torch.nn          as nn
+import matplotlib.pyplot as plt
 
-# Log config
+from dotenv           import load_dotenv
+from sklearn.metrics  import r2_score
+from torch.utils.data import DataLoader, random_split
 
-logging.config.fileConfig('logging.conf')
+from Dataset import Code15RandomLeadsDataset
+from Model   import ECGReconstructor
 
-logger = logging.getLogger()
+def setup_logger():
 
-# Loading env
+    logging.config.fileConfig("logging.conf")
 
-load_dotenv()
+    return logging.getLogger()
 
-# Training definitions
+def load_config():
 
-SEED               = int(os.environ.get("SEED"))
-EPOCHS             = int(os.environ.get("EPOCHS"))
-DIST_DIR           = os.environ.get("DIST_DIR")
-BATCH_SIZE         = int(os.environ.get("BATCH_SIZE"))
-DATA_FOLDER        = os.environ.get("DATA_FOLDER")
-SAMPLING_FREQUENCY = int(os.environ.get("SAMPLING_FREQUENCY"))
+    load_dotenv()
 
-    
-logger.info("Define dataset and dataloaders")
+    return {
+        "seed":               int(os.environ["SEED"]),
+        "epochs":             int(os.environ["EPOCHS"]),
+        "batch_size":         int(os.environ["BATCH_SIZE"]),
+        "data_folder":        os.environ["DATA_FOLDER"],
+        "dist_dir":           os.environ["DIST_DIR"],
+        "sampling_frequency": int(os.environ["SAMPLING_FREQUENCY"]),
+    }
 
-randomLeadsDataset = Code15RandomLeadsDataset(
-    hdf5Files  = os.listdir(DATA_FOLDER),
-    seed       = SEED
-)
+def create_dataset(data_folder, seed):
 
-logger.info(f"Dataset lenght is {len(randomLeadsDataset)}")
+    dataset = Code15RandomLeadsDataset(
+        hdf5Files=os.listdir(data_folder),
+        seed=seed
+    )
 
-dataloader = DataLoader(
-    dataset    = randomLeadsDataset,
-    batch_size = BATCH_SIZE,
-    shuffle    = False,
-)
+    return dataset
 
-# Holdout dataset
 
-generator = torch.Generator().manual_seed(SEED)
+def create_dataloaders(dataset, batch_size, seed):
 
-trainSize = int(0.80 * len(randomLeadsDataset))
-testSize  = len(randomLeadsDataset) - trainSize
+    generator = torch.Generator().manual_seed(seed)
 
-logger.info(f"Dataset train lenght is {trainSize}")
-logger.info(f"Dataset test lenght is {testSize}")
+    train_size = int(0.8 * len(dataset))
+    test_size  = len(dataset) - train_size
 
-trainSet, testSet = random_split(
-    randomLeadsDataset, 
-    [trainSize, testSize], 
-    generator = generator
-)
+    train_set, test_set = random_split(
+        dataset,
+        [train_size, test_size],
+        generator=generator
+    )
 
-# Dataloaders
+    train_loader = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=True
+    )
 
-trainDataloader = DataLoader(
-    dataset     = trainSet,
-    batch_size  = BATCH_SIZE,
-    shuffle     = True,
-)
+    test_loader = DataLoader(
+        test_set,
+        batch_size=batch_size,
+        shuffle=False
+    )
 
-testDataloader = DataLoader(
-    dataset     = testSet,
-    batch_size  = BATCH_SIZE,
-    shuffle     = False,
-)
+    return train_loader, test_loader
 
-# Model definition
+def create_model(device):
 
-logger.info("Define and compiling the model")
+    model = ECGReconstructor(
+        latentDim=128,
+        hiddenDim=32
+    )
 
-model = ECGReconstructor(
-    latentDim = 128,
-    hiddenDim = 32
-)
-model = torch.compile(model)
+    model = torch.compile(model)
 
-# GPU things
+    return model.to(device)
 
-logger.info("Checking if the GPU is available")
+def compute_r2(y_true, y_pred):
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    y_true = y_true.detach().cpu().flatten(0, 1).numpy()
+    y_pred = y_pred.detach().cpu().flatten(0, 1).numpy()
 
-logger.info(f"Device = {device}")
+    return r2_score(y_true, y_pred)
 
-model = model.to(device)
+def train_epoch(model, dataloader, optimizer, criterion, device):
 
-# The Training
+    model.train()
 
-logger.info("Starting the training!!")
+    epoch_loss = 0
+    epoch_r2   = 0
 
-optimizer = torch.optim.Adam(model.parameters())
-criterion = nn.MSELoss()
-
-trainingLoss = []
-r2Scores     = []
-
-numOfTrainBatches = len(trainDataloader)
-
-model.train()
-
-for epoch in range(EPOCHS):
-
-    loss     = 0
-    r2Score  = 0
-    
-    for X, Y in trainDataloader:
-
+    for X, Y in dataloader:
         X, Y = X.to(device), Y.to(device)
 
         prediction = model(X)
-        batchLoss  = criterion(prediction, Y) 
 
-        loss += batchLoss.item()
+        loss = criterion(prediction, Y)
 
-        YFlat          = Y.detach().cpu().flatten(0, 1).numpy()
-        predictionFlat = prediction.detach().cpu().flatten(0, 1).numpy()
-
-        r2Score += r2_score(YFlat, predictionFlat) 
-        
         optimizer.zero_grad()
-        batchLoss.backward()
+        loss.backward()
         optimizer.step()
+
+        epoch_loss += loss.item()
+        epoch_r2   += compute_r2(Y, prediction)
+
+    epoch_loss /= len(dataloader)
+    epoch_r2   /= len(dataloader)
+
+    return epoch_loss, epoch_r2
+
+def train(
+    model,
+    train_loader,
+    optimizer,
+    criterion,
+    device,
+    epochs,
+    logger
+):
     
-    loss    /= numOfTrainBatches
-    r2Score /= numOfTrainBatches
-    
-    trainingLoss.append(loss)
-    r2Scores.append(r2Score)
+    losses    = []
+    r2_scores = []
 
-    logger.info(f"Train - epoch = {epoch} loss = {loss: .5f} r2 = {r2Score: .5f}")
+    for epoch in range(epochs):
 
-# Generating the training plot
+        loss, r2 = train_epoch(
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device
+        )
 
-if not os.path.exists(DIST_DIR):
-    logger.warning("The dist folder does not exist. Creating")
-    os.makedirs(DIST_DIR)
+        losses.append(loss)
+        r2_scores.append(r2)
 
-## Loss x Epoch
+        logger.info(
+            f"Train - epoch={epoch} loss={loss:.5f} r2={r2:.5f}"
+        )
 
-figure, axes = plt.subplots(nrows = 2, ncols = 1, figsize = (10, 8), sharex = True)
+    return losses, r2_scores
 
-axes[0].scatter(range(EPOCHS), trainingLoss, c = "blue", marker = "x")
+def evaluate(model, dataloader, criterion, device):
 
-axes[0].set_title("Training Loss")
+    model.eval()
 
-axes[0].set_ylabel("Loss")
+    loss = 0
+    r2   = 0
 
-axes[0].grid()
+    with torch.no_grad():
+        for X, Y in dataloader:
 
-## r2Score x Epoch
+            X, Y = X.to(device), Y.to(device)
 
-axes[1].scatter(range(EPOCHS), r2Scores, c = "red", marker = "x")
+            prediction = model(X)
 
-axes[1].set_title("Training R²")
+            batch_loss = criterion(prediction, Y)
 
-axes[1].set_xlabel("Epoch")
-axes[1].set_ylabel("R²")
+            loss += batch_loss.item()
+            r2   += compute_r2(Y, prediction)
 
-axes[1].grid()
+    loss /= len(dataloader)
+    r2   /= len(dataloader)
 
-plt.tight_layout()
+    return loss, r2
 
-trainingPlotPath = os.path.join(DIST_DIR, "training.png") 
+def save_training_plot(losses, r2_scores, epochs, dist_dir):
+    os.makedirs(dist_dir, exist_ok=True)
 
-plt.savefig(trainingPlotPath)
+    fig, axes = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(10, 8),
+        sharex=True
+    )
 
-logger.info(f"Saving Training plot on {trainingPlotPath}")
+    axes[0].scatter(range(epochs), losses, marker="x")
+    axes[0].set_title("Training Loss")
+    axes[0].set_ylabel("Loss")
+    axes[0].grid()
 
-logger.info("Starting the evaluate!!")
+    axes[1].scatter(range(epochs), r2_scores, marker="x")
+    axes[1].set_title("Training R²")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("R²")
+    axes[1].grid()
 
-# The validation
+    plt.tight_layout()
 
-numOfTestBatches = len(testDataloader) 
+    output = os.path.join(dist_dir, "training.png")
+    plt.savefig(output)
 
-model.eval()
+    return output
 
-testLoss    = 0
-testR2Score = 0
+def main():
 
-with torch.no_grad():
-    for X, Y in testDataloader:
-          
-        X, Y =  X.to(device), Y.to(device)
-          
-        prediction =  model(X)
-        batchLoss  =  criterion(prediction, Y) 
-          
-        testLoss   += batchLoss.item()
-        
-        YFlat          = Y.detach().cpu().flatten(0, 1).numpy()
-        predictionFlat = prediction.detach().cpu().flatten(0, 1).numpy()
+    logger = setup_logger()
+    config = load_config()
 
-        testR2Score += r2_score(YFlat, predictionFlat)
-        
-testLoss    /= numOfTestBatches
-testR2Score /= numOfTestBatches
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
 
-logger.info(f"Validation - loss = {testLoss: .5f} r2 = {testR2Score: .5f}")
+    dataset = create_dataset(
+        config["data_folder"],
+        config["seed"]
+    )
 
-# Deploy the model
+    train_loader, test_loader = create_dataloaders(
+        dataset,
+        config["batch_size"],
+        config["seed"]
+    )
 
-modelDist = os.path.join(DIST_DIR, "model.pth")
+    model = create_model(device)
 
-torch.save(model.state_dict(), modelDist)
+    optimizer = torch.optim.Adam(model.parameters())
+    criterion = nn.MSELoss()
+
+    losses, r2_scores = train(
+        model,
+        train_loader,
+        optimizer,
+        criterion,
+        device,
+        config["epochs"],
+        logger
+    )
+
+    plot_path = save_training_plot(
+        losses,
+        r2_scores,
+        config["epochs"],
+        config["dist_dir"]
+    )
+
+    logger.info(f"Training plot saved at {plot_path}")
+
+    test_loss, test_r2 = evaluate(
+        model,
+        test_loader,
+        criterion,
+        device
+    )
+
+    logger.info(
+        f"Validation - loss={test_loss:.5f} r2={test_r2:.5f}"
+    )
+
+    model_path = os.path.join(
+        config["dist_dir"],
+        "model.pth"
+    )
+
+    torch.save(model.state_dict(), model_path)
+
+if __name__ == "__main__":
+    main()
