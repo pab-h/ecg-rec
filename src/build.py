@@ -15,6 +15,8 @@ from Model   import ECGReconstructor
 
 def setup_logger():
 
+    os.makedirs("logs", exist_ok = True)
+
     logging.config.fileConfig("logging.conf")
 
     return logging.getLogger()
@@ -75,8 +77,8 @@ def create_dataloaders(dataset, batch_size, seed):
 def create_model(device):
 
     model = ECGReconstructor(
-        latentDim=128,
-        hiddenDim=32
+        latentDim = 128,
+        hiddenDim = 32
     )
 
     model = torch.compile(model)
@@ -89,6 +91,27 @@ def compute_r2(y_true, y_pred):
     y_pred = y_pred.detach().cpu().flatten(0, 1).numpy()
 
     return r2_score(y_true, y_pred)
+
+def save_best_checkpoint(
+    model,
+    optimizer,
+    epoch,
+    val_r2,
+    dist_dir
+):
+    os.makedirs(dist_dir, exist_ok=True)
+
+    checkpoint_path = os.path.join(
+        dist_dir,
+        "best_model.pth"
+    )
+
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "val_r2": val_r2
+    }, checkpoint_path)
 
 def train_epoch(model, dataloader, optimizer, criterion, device):
 
@@ -119,19 +142,23 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
 def train(
     model,
     train_loader,
+    test_loader,
     optimizer,
     criterion,
     device,
     epochs,
+    dist_dir,
     logger
 ):
-    
+
     losses    = []
     r2_scores = []
 
+    best_val_r2 = -float("inf")
+
     for epoch in range(epochs):
 
-        loss, r2 = train_epoch(
+        train_loss, train_r2 = train_epoch(
             model,
             train_loader,
             optimizer,
@@ -139,12 +166,40 @@ def train(
             device
         )
 
-        losses.append(loss)
-        r2_scores.append(r2)
+        val_loss, val_r2 = evaluate(
+            model,
+            test_loader,
+            criterion,
+            device
+        )
+
+        losses.append(train_loss)
+        r2_scores.append(train_r2)
 
         logger.info(
-            f"Train - epoch={epoch} loss={loss:.5f} r2={r2:.5f}"
+            f"Epoch={epoch} "
+            f"train_loss={train_loss:.5f} "
+            f"train_r2={train_r2:.5f} "
+            f"val_loss={val_loss:.5f} "
+            f"val_r2={val_r2:.5f}"
         )
+
+        if val_r2 > best_val_r2:
+
+            best_val_r2 = val_r2
+
+            save_best_checkpoint(
+                model,
+                optimizer,
+                epoch,
+                val_r2,
+                dist_dir
+            )
+
+            logger.info(
+                f"New best model saved "
+                f"(epoch={epoch}, val_r2={val_r2:.5f})"
+            )
 
     return losses, r2_scores
 
@@ -228,10 +283,12 @@ def main():
     losses, r2_scores = train(
         model,
         train_loader,
+        test_loader,
         optimizer,
         criterion,
         device,
         config["epochs"],
+        config["dist_dir"],
         logger
     )
 
@@ -254,13 +311,6 @@ def main():
     logger.info(
         f"Validation - loss={test_loss:.5f} r2={test_r2:.5f}"
     )
-
-    model_path = os.path.join(
-        config["dist_dir"],
-        "model.pth"
-    )
-
-    torch.save(model.state_dict(), model_path)
 
 if __name__ == "__main__":
     main()
