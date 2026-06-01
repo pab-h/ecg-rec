@@ -10,13 +10,16 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from Dataset          import Code15RandomLeadsDataset
 from Model            import ECGReconstructor
+
 from dotenv           import load_dotenv
+
 from scipy.stats      import pearsonr
 from sklearn.metrics  import r2_score
 from sklearn.metrics  import mean_absolute_error
-from utils            import plotECG
-from utils            import methodComparativePlot
-from utils            import comparativeFullEcgPlot
+
+from utils import plotECG
+from utils import methodComparativePlot
+from utils import comparativeFullEcgPlot
 
 ecgColumns = [
     "LI",

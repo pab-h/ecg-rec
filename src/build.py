@@ -8,10 +8,13 @@ import matplotlib.pyplot as plt
 
 from dotenv           import load_dotenv
 from sklearn.metrics  import r2_score
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
+from torch.utils.data import random_split
 
 from Dataset import Code15RandomLeadsDataset
 from Model   import ECGReconstructor
+
+from utils import EarlyStopping
 
 def setup_logger():
 
@@ -57,19 +60,19 @@ def create_dataloaders(dataset, batch_size, seed):
     train_set, test_set = random_split(
         dataset,
         [train_size, test_size],
-        generator=generator
+        generator = generator
     )
 
     train_loader = DataLoader(
         train_set,
-        batch_size=batch_size,
-        shuffle=True
+        batch_size = batch_size,
+        shuffle    = True
     )
 
     test_loader = DataLoader(
         test_set,
-        batch_size=batch_size,
-        shuffle=False
+        batch_size = batch_size,
+        shuffle    = False
     )
 
     return train_loader, test_loader
@@ -107,10 +110,10 @@ def save_best_checkpoint(
     )
 
     torch.save({
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
+        "epoch":                epoch,
+        "model_state_dict":     model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
-        "val_r2": val_r2
+        "val_r2":               val_r2
     }, checkpoint_path)
 
 def train_epoch(model, dataloader, optimizer, criterion, device):
@@ -156,6 +159,11 @@ def train(
 
     best_val_r2 = -float("inf")
 
+    early_stopping = EarlyStopping(
+        patience  = 20,
+        min_delta = 1e-4
+    )
+
     for epoch in range(epochs):
 
         train_loss, train_r2 = train_epoch(
@@ -200,6 +208,16 @@ def train(
                 f"New best model saved "
                 f"(epoch={epoch}, val_r2={val_r2:.5f})"
             )
+
+        early_stopping(val_r2)
+
+        if early_stopping.stop:
+
+            logger.info(
+                f"Early stopping triggered at epoch {epoch}"
+            )
+
+            break
 
     return losses, r2_scores
 
@@ -295,22 +313,11 @@ def main():
     plot_path = save_training_plot(
         losses,
         r2_scores,
-        config["epochs"],
+        len(losses),
         config["dist_dir"]
     )
 
     logger.info(f"Training plot saved at {plot_path}")
-
-    test_loss, test_r2 = evaluate(
-        model,
-        test_loader,
-        criterion,
-        device
-    )
-
-    logger.info(
-        f"Validation - loss={test_loss:.5f} r2={test_r2:.5f}"
-    )
 
 if __name__ == "__main__":
     main()
