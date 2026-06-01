@@ -3,6 +3,32 @@ import numpy             as np
 
 from sklearn.metrics import r2_score
 
+class EarlyStopping:
+
+    def __init__(
+        self,
+        patience  = 20,
+        min_delta = 1e-4
+    ):
+        self.patience  = patience
+        self.min_delta = min_delta
+
+        self.best_score = -float("inf")
+        self.counter    = 0
+        self.stop       = False
+
+    def __call__(self, score):
+
+        if score > self.best_score + self.min_delta:
+            self.best_score = score
+            self.counter = 0
+
+        else:
+            self.counter += 1
+
+            if self.counter >= self.patience:
+                self.stop = True
+
 def comparativeFullEcgPlot(ecgOring, ecgRec, headers):
 
     figure, axes = plt.subplots(
