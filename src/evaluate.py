@@ -95,13 +95,18 @@ def load_model(dist_dir, device):
 
     model = torch.compile(model)
 
-    model_path = os.path.join(dist_dir, "model.pth")
+    model_path = os.path.join(
+        dist_dir,
+        "best_model.pth"
+    )
+
+    checkpoint = torch.load(
+        model_path,
+        map_location=device
+    )
 
     model.load_state_dict(
-        torch.load(
-            model_path,
-            weights_only=True
-        )
+        checkpoint["model_state_dict"]
     )
 
     return model.to(device)
@@ -111,8 +116,8 @@ def create_output_folders(dist_dir):
     metrics_dir = os.path.join(dist_dir, "metrics")
     exams_dir   = os.path.join(dist_dir, "exams")
 
-    os.makedirs(metrics_dir, exist_ok=True)
-    os.makedirs(exams_dir, exist_ok=True)
+    os.makedirs(metrics_dir, exist_ok = True)
+    os.makedirs(exams_dir, exist_ok = True)
 
     return metrics_dir, exams_dir
 

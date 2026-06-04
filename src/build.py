@@ -160,8 +160,8 @@ def train(
     best_val_r2 = -float("inf")
 
     early_stopping = EarlyStopping(
-        patience  = 20,
-        min_delta = 1e-4
+        patience  = 10,
+        min_delta = 1e-3
     )
 
     for epoch in range(epochs):
