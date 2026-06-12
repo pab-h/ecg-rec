@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from torch.utils.data import DataLoader
 from Dataset          import Code15RandomLeadsDataset
-from Model            import ECGReconstructor
+from Model            import ECGRecV2
 
 from dotenv           import load_dotenv
 
@@ -88,9 +88,8 @@ def create_dataloader(dataset, batch_size):
 
 def load_model(dist_dir, device):
 
-    model = ECGReconstructor(
-        latentDim = 128,
-        hiddenDim = 32
+    model = ECGRecV2(
+        latentDim = 128
     )
 
     model = torch.compile(model)

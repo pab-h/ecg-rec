@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import random_split
 
 from Dataset import Code15RandomLeadsDataset
-from Model   import ECGReconstructor
+from Model   import ECGRecV2
 
 from utils import EarlyStopping
 
@@ -79,9 +79,8 @@ def create_dataloaders(dataset, batch_size, seed):
 
 def create_model(device):
 
-    model = ECGReconstructor(
-        latentDim = 128,
-        hiddenDim = 32
+    model = ECGRecV2(
+        latentDim = 128
     )
 
     model = torch.compile(model)
