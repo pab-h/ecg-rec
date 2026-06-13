@@ -84,7 +84,8 @@ class Code15RandomLeadsDataset(Dataset):
         hdf5File = os.path.join(DATA_FOLDER, hdf5File)
 
         with h5py.File(hdf5File, "r") as file:
-            tracing = np.array(file['tracings'][examIdx]) 
+            tracing = np.array(file['tracings'][examIdx])
+            exam_id = int(file['exam_id'][examIdx])
 
         tracing = self.transform(tracing)
 
@@ -97,4 +98,4 @@ class Code15RandomLeadsDataset(Dataset):
         Y = tracing[:, self.target]
         Y = torch.tensor(Y, dtype = torch.float32)
 
-        return X, Y
+        return X, Y, exam_id

@@ -123,7 +123,7 @@ def train_epoch(model, dataloader, optimizer, criterion, device):
     epoch_loss = 0
     epoch_r2   = 0
 
-    for X, Y in dataloader:
+    for X, Y, _ in dataloader:
         X, Y = X.to(device), Y.to(device)
 
         prediction = model(X)
@@ -229,7 +229,7 @@ def evaluate(model, dataloader, criterion, device):
     r2   = 0
 
     with torch.no_grad():
-        for X, Y in dataloader:
+        for X, Y, _ in dataloader:
 
             X, Y = X.to(device), Y.to(device)
 
