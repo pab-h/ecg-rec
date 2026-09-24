@@ -71,7 +71,10 @@ def load_config():
 
 def create_dataset(data_folder, seed):
 
-    evaluate_file = os.listdir(data_folder)[-1]
+    evaluate_file = sorted(
+        f for f in os.listdir(data_folder)
+        if f.endswith(".hdf5")
+    )[-1]
 
     return Code15RandomLeadsDataset(
         hdf5Files = [evaluate_file],
@@ -170,17 +173,17 @@ def evaluate_dataset(
 
     r2_scores = pd.DataFrame(
         np.zeros((dataset_len, len(ecg_columns))),
-        columns = ecg_columns
+        columns=ecg_columns
     )
 
     mae_scores = pd.DataFrame(
         np.zeros((dataset_len, len(ecg_columns))),
-        columns = ecg_columns
+        columns=ecg_columns
     )
 
     correlations = pd.DataFrame(
         np.zeros((dataset_len, len(ecg_columns))),
-        columns = ecg_columns
+        columns=ecg_columns
     )
 
     sample_idx = 0
@@ -190,18 +193,22 @@ def evaluate_dataset(
     with torch.no_grad():
 
         exam_id_column = []
+        n_derivations_column = []
 
-        for X, Y, exam_ids in dataloader:
+        for X, Y, exam_ids, nLeadsToPick in dataloader:
 
             X = X.to(device)
 
             prediction = model(X).cpu()
-            Y          = Y.cpu()
+            Y = Y.cpu()
 
             for i in range(X.size(0)):
 
                 exam_id_column.append(
                     int(exam_ids[i])
+                )
+                n_derivations_column.append(
+                    nLeadsToPick[i].item()
                 )
 
                 r2_row, mae_row, corr_row = (
@@ -211,15 +218,47 @@ def evaluate_dataset(
                     )
                 )
 
-                r2_scores.iloc[sample_idx]    = r2_row
-                mae_scores.iloc[sample_idx]   = mae_row
+                r2_scores.iloc[sample_idx] = r2_row
+                mae_scores.iloc[sample_idx] = mae_row
                 correlations.iloc[sample_idx] = corr_row
 
                 sample_idx += 1
-                
-        r2_scores.insert(0, "exam_id", exam_id_column)
-        mae_scores.insert(0, "exam_id", exam_id_column)
-        correlations.insert(0, "exam_id", exam_id_column)
+
+        r2_scores.insert(
+            0,
+            "exam_id",
+            exam_id_column
+        )
+
+        mae_scores.insert(
+            0,
+            "exam_id",
+            exam_id_column
+        )
+
+        correlations.insert(
+            0,
+            "exam_id",
+            exam_id_column
+        )
+
+        r2_scores.insert(
+            1,
+            "n_derivations",
+            n_derivations_column
+        )
+
+        mae_scores.insert(
+            1,
+            "n_derivations",
+            n_derivations_column
+        )
+
+        correlations.insert(
+            1,
+            "n_derivations",
+            n_derivations_column
+        )
 
         return (
             r2_scores,
