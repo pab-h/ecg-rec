@@ -71,13 +71,15 @@ def load_config():
 
 def create_dataset(data_folder, seed):
 
-    evaluate_file = os.listdir(data_folder)[-1]
+    evaluate_file = sorted(
+        f for f in os.listdir(data_folder)
+        if f.endswith(".hdf5")
+    )[-1]
 
     return Code15RandomLeadsDataset(
         hdf5Files = [evaluate_file],
         seed      = seed
     )
-
 
 def create_dataloader(dataset, batch_size):
     return DataLoader(
@@ -170,17 +172,17 @@ def evaluate_dataset(
 
     r2_scores = pd.DataFrame(
         np.zeros((dataset_len, len(ecg_columns))),
-        columns = ecg_columns
+        columns=ecg_columns
     )
 
     mae_scores = pd.DataFrame(
         np.zeros((dataset_len, len(ecg_columns))),
-        columns = ecg_columns
+        columns=ecg_columns
     )
 
     correlations = pd.DataFrame(
         np.zeros((dataset_len, len(ecg_columns))),
-        columns = ecg_columns
+        columns=ecg_columns
     )
 
     sample_idx = 0
@@ -189,14 +191,24 @@ def evaluate_dataset(
 
     with torch.no_grad():
 
-        for X, Y in dataloader:
+        exam_id_column = []
+        n_derivations_column = []
+
+        for X, Y, exam_ids, nLeadsToPick in dataloader:
 
             X = X.to(device)
 
             prediction = model(X).cpu()
-            Y          = Y.cpu()
+            Y = Y.cpu()
 
             for i in range(X.size(0)):
+
+                exam_id_column.append(
+                    int(exam_ids[i])
+                )
+                n_derivations_column.append(
+                    nLeadsToPick[i].item()
+                )
 
                 r2_row, mae_row, corr_row = (
                     calculate_metrics(
@@ -205,17 +217,53 @@ def evaluate_dataset(
                     )
                 )
 
-                r2_scores.iloc[sample_idx]    = r2_row
-                mae_scores.iloc[sample_idx]   = mae_row
+                r2_scores.iloc[sample_idx] = r2_row
+                mae_scores.iloc[sample_idx] = mae_row
                 correlations.iloc[sample_idx] = corr_row
 
                 sample_idx += 1
 
-    return (
-        r2_scores,
-        mae_scores,
-        correlations
-    )
+        r2_scores.insert(
+            0,
+            "exam_id",
+            exam_id_column
+        )
+
+        mae_scores.insert(
+            0,
+            "exam_id",
+            exam_id_column
+        )
+
+        correlations.insert(
+            0,
+            "exam_id",
+            exam_id_column
+        )
+
+        r2_scores.insert(
+            1,
+            "n_derivations",
+            n_derivations_column
+        )
+
+        mae_scores.insert(
+            1,
+            "n_derivations",
+            n_derivations_column
+        )
+
+        correlations.insert(
+            1,
+            "n_derivations",
+            n_derivations_column
+        )
+
+        return (
+            r2_scores,
+            mae_scores,
+            correlations
+        )
 
 def save_metric_plots(
     metric_df,
@@ -292,7 +340,9 @@ def save_best_and_worst_ecgs(
     top_k = 5
 ):
 
-    mean_r2   = r2_scores.mean(axis=1)
+    mean_r2 = r2_scores.drop(
+        columns=["exam_id"]
+    ).mean(axis=1)
 
     best_ids  = mean_r2.nlargest(top_k).index.tolist()
     worst_ids = mean_r2.nsmallest(top_k).index.tolist()
@@ -309,7 +359,7 @@ def save_best_and_worst_ecgs(
 
     for category, ecg_id in selected_ecgs:
 
-        sample_x, sample_y = dataset[ecg_id]
+        sample_x, sample_y, exam_id = dataset[ecg_id]
 
         with torch.no_grad():
 
@@ -325,20 +375,30 @@ def save_best_and_worst_ecgs(
 
         sample_ecg = pd.DataFrame(
             sample_y,
-            columns=ecg_columns
+            columns = ecg_columns
         )
 
         random_leads = pd.DataFrame(
             sample_x,
-            columns=ecg_columns
+            columns = ecg_columns
         )
 
         reconstructed = pd.DataFrame(
             prediction,
-            columns=ecg_columns
+            columns = ecg_columns
         )
 
         mean_score = mean_r2.iloc[ecg_id]
+
+        sample_ecg.to_csv(
+            f"{exams_dir}/{category} - ECG {exam_id} - Original.csv",
+            index = False
+        )
+
+        reconstructed.to_csv(
+            f"{exams_dir}/{category} - ECG {exam_id} - Reconstructed.csv",
+            index = False
+        )
 
         plotECG(
             sample_ecg,
@@ -406,6 +466,21 @@ def main():
         )
     )
 
+    r2_scores.to_csv(
+        f"{config["dist_dir"]}/r2.scores.csv", 
+        index = False
+    )
+
+    mae_scores.to_csv(
+        f"{config["dist_dir"]}/mae.scores.csv", 
+        index = False
+    )
+
+    correlations.to_csv(
+        f"{config["dist_dir"]}/corr.scores.csv", 
+        index = False
+    )
+
     save_metric_plots(
         correlations,
         "CORR",
@@ -429,8 +504,8 @@ def main():
 
     save_violin_plots(
         {
-            "MAE": mae_scores,
-            "R2": r2_scores,
+            "MAE":  mae_scores,
+            "R2":   r2_scores,
             "CORR": correlations
         },
         ecgColumns,
