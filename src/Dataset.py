@@ -98,4 +98,4 @@ class Code15RandomLeadsDataset(Dataset):
         Y = tracing[:, self.target]
         Y = torch.tensor(Y, dtype = torch.float32)
 
-        return X, Y, exam_id
+        return X, Y, exam_id, nLeadsToPick
