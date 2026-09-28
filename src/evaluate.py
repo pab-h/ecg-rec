@@ -1,4 +1,5 @@
 import os
+import h5py
 import torch
 import logging
 import logging.config
@@ -167,103 +168,106 @@ def evaluate_dataset(
     dataloader,
     dataset_len,
     ecg_columns,
+    output_h5_path,
     device
 ):
-
     r2_scores = pd.DataFrame(
-        np.zeros((dataset_len, len(ecg_columns))),
-        columns=ecg_columns
+        np.zeros((dataset_len, len(ecg_columns))), columns=ecg_columns
     )
 
     mae_scores = pd.DataFrame(
-        np.zeros((dataset_len, len(ecg_columns))),
-        columns=ecg_columns
+        np.zeros((dataset_len, len(ecg_columns))), columns=ecg_columns
     )
 
     correlations = pd.DataFrame(
-        np.zeros((dataset_len, len(ecg_columns))),
-        columns=ecg_columns
+        np.zeros((dataset_len, len(ecg_columns))), columns=ecg_columns
     )
 
     sample_idx = 0
-
     model.eval()
 
-    with torch.no_grad():
+    with torch.no_grad(), h5py.File(output_h5_path, "w") as h5f:
+        
+        h5_predictions = None
+        h5_targets = None
+        h5_exam_ids = h5f.create_dataset(
+            "exam_id", shape=(dataset_len,), dtype="i8"
+        )
+        h5_n_derivations = h5f.create_dataset(
+            "n_derivations", shape=(dataset_len,), dtype="i4"
+        )
 
-        exam_id_column = []
+        h5f.attrs["ecg_columns"] = [str(col) for col in ecg_columns]
+
+        exam_id_column       = []
         n_derivations_column = []
 
         for X, Y, exam_ids, nLeadsToPick in dataloader:
-
             X = X.to(device)
 
             prediction = model(X).cpu()
             Y = Y.cpu()
 
-            for i in range(X.size(0)):
+            batch_size = X.size(0)
 
-                exam_id_column.append(
-                    int(exam_ids[i])
+            if h5_predictions is None:
+
+                signal_shape = prediction.shape[1:]
+
+                chunk_shape = (batch_size, *signal_shape)
+
+                h5_predictions = h5f.create_dataset(
+                    "predictions",
+                    shape=(dataset_len, *signal_shape),
+                    dtype="f4",
+                    compression="gzip",
+                    compression_opts=4,
+                    chunks=chunk_shape,
                 )
-                n_derivations_column.append(
-                    nLeadsToPick[i].item()
+
+                h5_targets = h5f.create_dataset(
+                    "targets",
+                    shape=(dataset_len, *signal_shape),
+                    dtype="f4",
+                    compression="gzip",
+                    compression_opts=4,
+                    chunks=chunk_shape,
                 )
 
-                r2_row, mae_row, corr_row = (
-                    calculate_metrics(
-                        Y[i].numpy(),
-                        prediction[i].numpy()
-                    )
+            end_idx = sample_idx + batch_size
+
+            h5_predictions[sample_idx:end_idx] = prediction.numpy()
+            h5_targets[sample_idx:end_idx]     = Y.numpy()
+
+            for i in range(batch_size):
+                exam_id = int(exam_ids[i])
+                n_derivations = nLeadsToPick[i].item()
+
+                exam_id_column.append(exam_id)
+                n_derivations_column.append(n_derivations)
+
+                h5_exam_ids[sample_idx + i] = exam_id
+                h5_n_derivations[sample_idx + i] = n_derivations
+
+                r2_row, mae_row, corr_row = calculate_metrics(
+                    Y[i].numpy(), prediction[i].numpy()
                 )
 
-                r2_scores.iloc[sample_idx] = r2_row
-                mae_scores.iloc[sample_idx] = mae_row
-                correlations.iloc[sample_idx] = corr_row
+                r2_scores.iloc[sample_idx + i]    = r2_row
+                mae_scores.iloc[sample_idx + i]   = mae_row
+                correlations.iloc[sample_idx + i] = corr_row
 
-                sample_idx += 1
+            sample_idx += batch_size
 
-        r2_scores.insert(
-            0,
-            "exam_id",
-            exam_id_column
-        )
+        r2_scores.insert(0, "exam_id", exam_id_column)
+        mae_scores.insert(0, "exam_id", exam_id_column)
+        correlations.insert(0, "exam_id", exam_id_column)
 
-        mae_scores.insert(
-            0,
-            "exam_id",
-            exam_id_column
-        )
+        r2_scores.insert(1, "n_derivations", n_derivations_column)
+        mae_scores.insert(1, "n_derivations", n_derivations_column)
+        correlations.insert(1, "n_derivations", n_derivations_column)
 
-        correlations.insert(
-            0,
-            "exam_id",
-            exam_id_column
-        )
-
-        r2_scores.insert(
-            1,
-            "n_derivations",
-            n_derivations_column
-        )
-
-        mae_scores.insert(
-            1,
-            "n_derivations",
-            n_derivations_column
-        )
-
-        correlations.insert(
-            1,
-            "n_derivations",
-            n_derivations_column
-        )
-
-        return (
-            r2_scores,
-            mae_scores,
-            correlations
-        )
+        return r2_scores, mae_scores, correlations
 
 def save_metric_plots(
     metric_df,
@@ -287,47 +291,6 @@ def save_metric_plots(
 
         figure.savefig(output)
 
-def save_violin_plots(
-    metrics,
-    ecg_columns,
-    metrics_dir
-):
-
-    for metric_name, metric_df in metrics.items():
-
-        plt.figure(figsize=(12, 6))
-
-        data = [
-            metric_df[col].dropna()
-            for col in ecg_columns
-        ]
-
-        plt.violinplot(
-            data,
-            showmeans   = True,
-            showmedians = True,
-            showextrema = True
-        )
-
-        plt.xticks(
-            range(1, len(ecg_columns) + 1),
-            ecg_columns,
-            rotation = 45
-        )
-
-        plt.title(
-            f"{metric_name} - Violin Plot por Derivação"
-        )
-
-        plt.tight_layout()
-
-        output = os.path.join(
-            metrics_dir,
-            f"{metric_name} - Violinplot.png"
-        )
-
-        plt.savefig(output)
-        plt.close()
 
 def save_best_and_worst_ecgs(
     model,
@@ -359,7 +322,7 @@ def save_best_and_worst_ecgs(
 
     for category, ecg_id in selected_ecgs:
 
-        sample_x, sample_y, exam_id = dataset[ecg_id]
+        sample_x, sample_y, exam_id, _ = dataset[ecg_id]
 
         with torch.no_grad():
 
@@ -462,6 +425,7 @@ def main():
             dataloader,
             len(dataset),
             ecgColumns,
+             f"{config["dist_dir"]}/ecg.reconstructions.h5",
             device
         )
     )
@@ -498,16 +462,6 @@ def main():
     save_metric_plots(
         mae_scores,
         "MAE",
-        ecgColumns,
-        metrics_dir
-    )
-
-    save_violin_plots(
-        {
-            "MAE":  mae_scores,
-            "R2":   r2_scores,
-            "CORR": correlations
-        },
         ecgColumns,
         metrics_dir
     )
