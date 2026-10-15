@@ -15,6 +15,70 @@ load_dotenv()
 DATA_FOLDER        = os.environ.get("DATA_FOLDER")
 SAMPLING_FREQUENCY = int(os.environ.get("SAMPLING_FREQUENCY"))
 
+class Code15Dataset(Dataset):
+
+    def __init__(self, hdf5Files, data_folder, seed = None):
+        super().__init__()
+
+        self.hdf5Files = hdf5Files
+        self.indexMap  = []  
+        self.features  = np.arange(0, 12)
+        self.target    = np.arange(0, 12)
+
+        self.data_folder = data_folder
+
+        for fileIndex, path in enumerate(self.hdf5Files):
+
+            dataFile = os.path.join(self.data_folder, f"{path}")
+
+            with h5py.File(dataFile, "r") as file:
+
+                samplesCount = file['exam_id'].shape[0]
+                self.indexMap.extend([(fileIndex, i) for i in range(samplesCount)])
+
+        if seed:
+            np.random.seed(seed)
+
+    def transform(self, ecg):
+        b, a = signal.butter(
+            N     = 1, 
+            Wn    = 1, 
+            btype = 'high', 
+            fs    = SAMPLING_FREQUENCY
+        )
+        
+        ecgFiltred  = signal.filtfilt(b, a, ecg, axis = 0)
+        ecgWithGain = 5 * ecgFiltred
+        ecgClean    = ecgWithGain[600: -600, :]
+
+        ecgMean = np.mean(ecgClean, axis = 0, keepdims = True)
+        ecgStd  = np.std(ecgClean,  axis = 0, keepdims = True) + 1e-8
+
+        ecgNormalized = (ecgClean - ecgMean) / ecgStd
+
+        return ecgNormalized
+
+    def __len__(self):
+        return len(self.indexMap)
+
+    def __getitem__(self, idx):
+        
+        fileIndex, examIdx = self.indexMap[idx]
+        hdf5File           = self.hdf5Files[fileIndex]
+
+        hdf5File = os.path.join(self.data_folder, hdf5File)
+
+        with h5py.File(hdf5File, "r") as file:
+            tracing = np.array(file['tracings'][examIdx])
+
+        tracing = self.transform(tracing)
+
+        X = tracing[:, self.target]
+        X = torch.tensor(X, dtype = torch.float32)
+
+        return X
+
+
 class Code15RandomLeadsDataset(Dataset):
 
     def __init__(self, hdf5Files, seed = None):
