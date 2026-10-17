@@ -41,23 +41,43 @@ class Code15RandomLeadsDataset(Dataset):
             np.random.seed(seed)
 
     def transform(self, ecg):
+
         b, a = signal.butter(
-            N     = 1, 
+            N     = 2, 
             Wn    = 1, 
             btype = 'high', 
             fs    = SAMPLING_FREQUENCY
         )
+        ecgFiltred = signal.filtfilt(b, a, ecg, axis = 0)
+
+
+        start_idx = int(0.5 * SAMPLING_FREQUENCY)
+        end_idx   = int(-0.5 * SAMPLING_FREQUENCY)
         
-        ecgFiltred  = signal.filtfilt(b, a, ecg, axis = 0)
-        ecgWithGain = 5 * ecgFiltred
-        ecgClean    = ecgWithGain[600: -600, :]
+        ecgCroped = ecgFiltred[start_idx:end_idx, :]
 
-        ecgMean = np.mean(ecgClean, axis = 0, keepdims = True)
-        ecgStd  = np.std(ecgClean,  axis = 0, keepdims = True) + 1e-8
 
-        ecgNormalized = (ecgClean - ecgMean) / ecgStd
+        ecgMean = np.mean(ecgCroped, axis = 0, keepdims = True)
+        ecgStd  = np.std(ecgCroped,  axis = 0, keepdims = True) + 1e-8
 
-        return ecgNormalized
+        ecgNormalized = (ecgCroped - ecgMean) / ecgStd
+
+
+        target_samples = 4096
+        current_samples = ecgNormalized.shape[0]
+
+        pad_amount = target_samples - current_samples
+        pad_before = pad_amount // 2
+        pad_after  = pad_amount - pad_before
+        
+        ecgZeroPadding = np.pad(
+            ecgNormalized, 
+            pad_width       = ((pad_before, pad_after), (0, 0)), 
+            mode            = 'constant', 
+            constant_values = 0
+        )
+
+        return ecgZeroPadding
 
     def __len__(self):
         return len(self.indexMap)
@@ -67,7 +87,7 @@ class Code15RandomLeadsDataset(Dataset):
         fileIndex, examIdx = self.indexMap[idx]
         hdf5File           = self.hdf5Files[fileIndex]
 
-        nLeadsToPick = np.random.randint(3, 9)
+        nLeadsToPick = np.random.randint(3, 9 + 1)
 
         odds =  1 / (self.leadCounts + 1)
         odds /= odds.sum()
