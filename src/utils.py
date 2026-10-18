@@ -1,34 +1,57 @@
 import matplotlib.pyplot as plt
 import numpy             as np
+import tensorflow        as tf
 
+from keras.metrics   import Metric
 from sklearn.metrics import r2_score
 
-class EarlyStopping:
+import tensorflow as tf
 
-    def __init__(
-        self,
-        patience  = 20,
-        min_delta = 1e-4
-    ):
-        self.patience  = patience
-        self.min_delta = min_delta
+class R2ScoreMetric(tf.keras.metrics.Metric):
+    def __init__(self, name='r2_score', **kwargs):
+        
+        super().__init__(name=name, **kwargs)
 
-        self.best_score = -float("inf")
-        self.counter    = 0
-        self.stop       = False
+        self.ss_res   = self.add_weight(shape=(12,), initializer='zeros', name='ss_res')
+        self.sum_y    = self.add_weight(shape=(12,), initializer='zeros', name='sum_y')
+        self.sum_y_sq = self.add_weight(shape=(12,), initializer='zeros', name='sum_y_sq')
+        self.count    = self.add_weight(shape=(), initializer='zeros', name='count')
 
-    def __call__(self, score):
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(y_pred, tf.float32)
 
-        if score > self.best_score + self.min_delta:
-            self.best_score = score
-            self.counter = 0
+        input_shape = tf.shape(y_true)
+        y_true_flat = tf.reshape(y_true, [-1, input_shape[-1]])
+        y_pred_flat = tf.reshape(y_pred, [-1, input_shape[-1]])
 
-        else:
-            self.counter += 1
+        batch_ss_res = tf.reduce_sum(tf.square(y_true_flat - y_pred_flat), axis=0)
+        self.ss_res.assign_add(batch_ss_res)
 
-            if self.counter >= self.patience:
-                self.stop = True
+        self.sum_y.assign_add(tf.reduce_sum(y_true_flat, axis=0))
+        self.sum_y_sq.assign_add(tf.reduce_sum(tf.square(y_true_flat), axis=0))
 
+        n_samples = tf.cast(tf.shape(y_true_flat)[0], tf.float32)
+        self.count.assign_add(n_samples)
+
+    def result(self):
+
+        mean_y = self.sum_y / tf.maximum(self.count, 1.0)
+        
+        ss_tot = self.sum_y_sq - (self.sum_y * mean_y)
+        
+        ss_tot = tf.where(ss_tot == 0.0, 1e-8, ss_tot)
+
+        r2_per_column = 1.0 - (self.ss_res / ss_tot)
+        
+        return tf.reduce_mean(r2_per_column)
+
+    def reset_state(self):
+        self.ss_res.assign(tf.zeros(12))
+        self.sum_y.assign(tf.zeros(12))
+        self.sum_y_sq.assign(tf.zeros(12))
+        self.count.assign(0.0)
+        
 def comparativeFullEcgPlot(ecgOring, ecgRec, headers):
 
     figure, axes = plt.subplots(

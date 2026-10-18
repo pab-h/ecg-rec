@@ -1,29 +1,27 @@
 import os
 import h5py
-import torch
+import tensorflow as tf
 
-import numpy  	    as np
+import numpy        as np
 import scipy.signal as signal
 
-from torch.utils.data import Dataset
-from dotenv           import load_dotenv
-
-# Loading env
+from dotenv import load_dotenv
 
 load_dotenv()
 
 DATA_FOLDER        = os.environ.get("DATA_FOLDER")
 SAMPLING_FREQUENCY = int(os.environ.get("SAMPLING_FREQUENCY"))
 
-class Code15RandomLeadsDataset(Dataset):
+class Code15RandomLeadsSequence(tf.keras.utils.Sequence):
 
-    def __init__(self, hdf5Files, seed = None):
+    def __init__(self, hdf5Files, batch_size = 32, seed = None):
         super().__init__()
 
         self.hdf5Files = hdf5Files
         self.indexMap  = []  
         self.features  = np.arange(0, 12)
         self.target    = np.arange(0, 12)
+        self.batch_size = batch_size
 
         self.nLeads      = 12  
         self.leadCounts  = np.zeros(self.nLeads)
@@ -39,6 +37,60 @@ class Code15RandomLeadsDataset(Dataset):
 
         if seed:
             np.random.seed(seed)
+            
+        np.random.shuffle(self.indexMap)
+
+    def __len__(self):
+        return int(np.ceil(len(self.indexMap) / self.batch_size))
+
+    def __getitem__(self, index):
+        batch_indexes = self.indexMap[index * self.batch_size : (index + 1) * self.batch_size]
+        
+        batch_X = []
+        batch_Y = []
+        batch_exam_ids = []
+        batch_n_leads = []
+
+        for fileIndex, examIdx in batch_indexes:
+            hdf5File = self.hdf5Files[fileIndex]
+
+            nLeadsToPick = np.random.randint(3, 9 + 1)
+
+            odds =  1 / (self.leadCounts + 1)
+            odds /= odds.sum()
+
+            chosenLeads = np.random.choice(
+                a       = self.nLeads,
+                size    = nLeadsToPick,
+                replace = False,
+                p       = odds
+            )
+
+            self.leadCounts[chosenLeads] += 1
+
+            hdf5FilePath = os.path.join(DATA_FOLDER, hdf5File)
+
+            with h5py.File(hdf5FilePath, "r") as file:
+                tracing = np.array(file['tracings'][examIdx])
+                exam_id = int(file['exam_id'][examIdx])
+
+            tracing = self.transform(tracing)
+
+            X = np.zeros_like(tracing)
+            X[:, chosenLeads] = tracing[:, chosenLeads]
+
+            X = X[:, self.features]
+            Y = tracing[:, self.target]
+
+            batch_X.append(X)
+            batch_Y.append(Y)
+            batch_exam_ids.append(exam_id)
+            batch_n_leads.append(nLeadsToPick)
+
+        return np.array(batch_X, dtype = np.float32), np.array(batch_Y, dtype = np.float32)
+
+    def on_epoch_end(self):
+        np.random.shuffle(self.indexMap)
 
     def transform(self, ecg):
 
@@ -78,44 +130,3 @@ class Code15RandomLeadsDataset(Dataset):
         )
 
         return ecgZeroPadding
-
-    def __len__(self):
-        return len(self.indexMap)
-
-    def __getitem__(self, idx):
-        
-        fileIndex, examIdx = self.indexMap[idx]
-        hdf5File           = self.hdf5Files[fileIndex]
-
-        nLeadsToPick = np.random.randint(3, 9 + 1)
-
-        odds =  1 / (self.leadCounts + 1)
-        odds /= odds.sum()
-
-        chosenLeads = np.random.choice(
-            a       = self.nLeads,
-            size    = nLeadsToPick,
-            replace = False,
-            p       = odds
-        )
-
-        self.leadCounts[chosenLeads] += 1
-
-        hdf5File = os.path.join(DATA_FOLDER, hdf5File)
-
-        with h5py.File(hdf5File, "r") as file:
-            tracing = np.array(file['tracings'][examIdx])
-            exam_id = int(file['exam_id'][examIdx])
-
-        tracing = self.transform(tracing)
-
-        X = np.zeros_like(tracing)
-        X[:, chosenLeads] = tracing[:, chosenLeads]
-
-        X = X[:, self.features]
-        X = torch.tensor(X, dtype = torch.float32)
-
-        Y = tracing[:, self.target]
-        Y = torch.tensor(Y, dtype = torch.float32)
-
-        return X, Y, exam_id, nLeadsToPick

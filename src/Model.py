@@ -1,83 +1,74 @@
-import torch.nn as nn
+import tensorflow as tf
 
-class ECGRecV1(nn.Module):
+from keras import layers
+
+class ECGRecV1(tf.keras.Model):
 
     def __init__(self, latentDim, hiddenDim):
-        super().__init__()
+        super(ECGRecV1, self).__init__()
 
-        self.encoder = nn.Sequential(
+        self.encoder = tf.keras.Sequential([
+            layers.Conv1D(filters=hiddenDim, kernel_size=5, strides=2, padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU(),
 
-            nn.Conv1d(12, hiddenDim, 5, stride=2, padding=2),
-            nn.BatchNorm1d(hiddenDim),
-            nn.ReLU(),
+            layers.Conv1D(filters=latentDim, kernel_size=5, strides=2, padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU()
+        ])
 
-            nn.Conv1d(hiddenDim, latentDim, 5, stride=2, padding=2),
-            nn.BatchNorm1d(latentDim),
-            nn.ReLU()
+        self.decoder = tf.keras.Sequential([
+            layers.Conv1DTranspose(filters=hiddenDim, kernel_size=4, strides=2, padding='same'),
+            layers.ReLU(),
 
-        )
+            layers.Conv1DTranspose(filters=12, kernel_size=4, strides=2, padding='same')
+        ])
 
-        self.decoder = nn.Sequential(
-
-            nn.ConvTranspose1d(latentDim, hiddenDim, 4, stride=2, padding=1),
-            nn.ReLU(),
-
-            nn.ConvTranspose1d(hiddenDim, 12, 4, stride=2, padding=1),
-            
-        )
-
-    def forward(self, x):
-        x  = x.permute(0, 2, 1)
-        z   = self.encoder(x)
+    def call(self, inputs):
+        z = self.encoder(inputs)
         out = self.decoder(z)
         
-        return out.permute(0, 2, 1)
+        return out
 
-class ECGRecV2(nn.Module):
+
+class ECGRecV2(tf.keras.Model):
 
     def __init__(self, latentDim):
+        super(ECGRecV2, self).__init__()
 
-        super().__init__()
+        self.encoder = tf.keras.Sequential([
+            layers.Conv1D(filters=32, kernel_size=5, strides=2, padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU(),
 
-        self.encoder = nn.Sequential(
+            layers.Conv1D(filters=64, kernel_size=5, strides=2, padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU(),
 
-            nn.Conv1d(12, 32, 5, stride=2, padding=2),
-            nn.BatchNorm1d(32),
-            nn.ReLU(),
+            layers.Conv1D(filters=128, kernel_size=5, strides=2, padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU(),
 
-            nn.Conv1d(32, 64, 5, stride=2, padding=2),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-
-            nn.Conv1d(64, 128, 5, stride=2, padding=2),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-
-            nn.Conv1d(128, latentDim, 5, stride=2, padding=2),
-            nn.BatchNorm1d(latentDim),
-            nn.ReLU()
-
-        )
+            layers.Conv1D(filters=latentDim, kernel_size=5, strides=2, padding='same'),
+            layers.BatchNormalization(),
+            layers.ReLU()
+        ])
         
-        self.decoder = nn.Sequential(
+        self.decoder = tf.keras.Sequential([
+            layers.Conv1DTranspose(filters=128, kernel_size=4, strides=2, padding='same'),
+            layers.ReLU(),
 
-            nn.ConvTranspose1d(latentDim, 128, 4, stride=2, padding=1),
-            nn.ReLU(),
+            layers.Conv1DTranspose(filters=64, kernel_size=4, strides=2, padding='same'),
+            layers.ReLU(),
 
-            nn.ConvTranspose1d(128, 64, 4, stride=2, padding=1),
-            nn.ReLU(),
+            layers.Conv1DTranspose(filters=32, kernel_size=4, strides=2, padding='same'),
+            layers.ReLU(),
 
-            nn.ConvTranspose1d(64, 32, 4, stride=2, padding=1),
-            nn.ReLU(),
+            layers.Conv1DTranspose(filters=12, kernel_size=4, strides=2, padding='same')
+        ])
 
-            nn.ConvTranspose1d(32, 12, 4, stride=2, padding=1),
-
-        )
-
-    def forward(self, x):
-        x  = x.permute(0, 2, 1)
-        z   = self.encoder(x)
+    def call(self, inputs):
+        z = self.encoder(inputs)
         out = self.decoder(z)
         
-        return out.permute(0, 2, 1)
-    
+        return out

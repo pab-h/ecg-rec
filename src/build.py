@@ -2,32 +2,25 @@ import os
 import logging
 import logging.config
 
-import torch
-import torch.nn          as nn
+import tensorflow        as tf
 import matplotlib.pyplot as plt
 
-from dotenv           import load_dotenv
-from sklearn.metrics  import r2_score
-from torch.utils.data import DataLoader
-from torch.utils.data import random_split
-
-from Dataset import Code15RandomLeadsDataset
+from dotenv  import load_dotenv
+from Dataset import Code15RandomLeadsSequence
 from Model   import ECGRecV2
+from utils   import R2ScoreMetric
 
-from utils import EarlyStopping
+from sklearn.metrics import r2_score
 
 def setup_logger():
 
-    os.makedirs("logs", exist_ok = True)
-
+    os.makedirs("logs", exist_ok=True)
     logging.config.fileConfig("logging.conf")
 
     return logging.getLogger()
 
 def load_config():
-
     load_dotenv()
-
     return {
         "seed":               int(os.environ["SEED"]),
         "epochs":             int(os.environ["EPOCHS"]),
@@ -37,238 +30,72 @@ def load_config():
         "sampling_frequency": int(os.environ["SAMPLING_FREQUENCY"]),
     }
 
-def create_dataset(data_folder, seed):
+def create_sequences(data_folder, batch_size, seed):
 
     train_test_files = os.listdir(data_folder)
     train_test_files = train_test_files[:-1]
 
-    dataset = Code15RandomLeadsDataset(
-        hdf5Files = train_test_files,
-        seed      = seed
-    )
+    split_idx   = int(0.8 * len(train_test_files))
+    train_files = train_test_files[:split_idx]
+    val_files   = train_test_files[split_idx:]
 
-    return dataset
-
-
-def create_dataloaders(dataset, batch_size, seed):
-
-    generator = torch.Generator().manual_seed(seed)
-
-    train_size = int(0.8 * len(dataset))
-    test_size  = len(dataset) - train_size
-
-    train_set, test_set = random_split(
-        dataset,
-        [train_size, test_size],
-        generator = generator
-    )
-
-    train_loader = DataLoader(
-        train_set,
+    train_seq = Code15RandomLeadsSequence(
+        hdf5Files  = train_files,
         batch_size = batch_size,
-        shuffle    = True
+        seed       = seed
     )
 
-    test_loader = DataLoader(
-        test_set,
+    val_seq = Code15RandomLeadsSequence(
+        hdf5Files  = val_files,
         batch_size = batch_size,
-        shuffle    = False
+        seed       = seed
     )
 
-    return train_loader, test_loader
+    return train_seq, val_seq
 
-def create_model(device):
+def create_model():
 
-    model = ECGRecV2(
-        latentDim = 128
-    )
+    model = ECGRecV2(latentDim=128)
 
-    model = torch.compile(model)
+    return model
 
-    return model.to(device)
+def save_training_plot(history, dist_dir):
 
-def compute_r2(y_true, y_pred):
-
-    y_true = y_true.detach().cpu().flatten(0, 1).numpy()
-    y_pred = y_pred.detach().cpu().flatten(0, 1).numpy()
-
-    return r2_score(y_true, y_pred)
-
-def save_best_checkpoint(
-    model,
-    optimizer,
-    epoch,
-    val_r2,
-    dist_dir
-):
     os.makedirs(dist_dir, exist_ok=True)
 
-    checkpoint_path = os.path.join(
-        dist_dir,
-        "best_model.pth"
-    )
-
-    torch.save({
-        "epoch":                epoch,
-        "model_state_dict":     model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "val_r2":               val_r2
-    }, checkpoint_path)
-
-def train_epoch(model, dataloader, optimizer, criterion, device):
-
-    model.train()
-
-    epoch_loss = 0
-    epoch_r2   = 0
-
-    for X, Y, _, _ in dataloader:
-        X, Y = X.to(device), Y.to(device)
-
-        prediction = model(X)
-
-        loss = criterion(prediction, Y)
-
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        epoch_loss += loss.item()
-        epoch_r2   += compute_r2(Y, prediction)
-
-    epoch_loss /= len(dataloader)
-    epoch_r2   /= len(dataloader)
-
-    return epoch_loss, epoch_r2
-
-def train(
-    model,
-    train_loader,
-    test_loader,
-    optimizer,
-    criterion,
-    device,
-    epochs,
-    dist_dir,
-    logger
-):
-
-    losses    = []
-    r2_scores = []
-
-    best_val_r2 = -float("inf")
-
-    early_stopping = EarlyStopping(
-        patience  = 10,
-        min_delta = 1e-3
-    )
-
-    for epoch in range(epochs):
-
-        train_loss, train_r2 = train_epoch(
-            model,
-            train_loader,
-            optimizer,
-            criterion,
-            device
-        )
-
-        val_loss, val_r2 = evaluate(
-            model,
-            test_loader,
-            criterion,
-            device
-        )
-
-        losses.append(train_loss)
-        r2_scores.append(train_r2)
-
-        logger.info(
-            f"Epoch={epoch} "
-            f"train_loss={train_loss:.5f} "
-            f"train_r2={train_r2:.5f} "
-            f"val_loss={val_loss:.5f} "
-            f"val_r2={val_r2:.5f}"
-        )
-
-        if val_r2 > best_val_r2:
-
-            best_val_r2 = val_r2
-
-            save_best_checkpoint(
-                model,
-                optimizer,
-                epoch,
-                val_r2,
-                dist_dir
-            )
-
-            logger.info(
-                f"New best model saved "
-                f"(epoch={epoch}, val_r2={val_r2:.5f})"
-            )
-
-        early_stopping(val_r2)
-
-        if early_stopping.stop:
-
-            logger.info(
-                f"Early stopping triggered at epoch {epoch}"
-            )
-
-            break
-
-    return losses, r2_scores
-
-def evaluate(model, dataloader, criterion, device):
-
-    model.eval()
-
-    loss = 0
-    r2   = 0
-
-    with torch.no_grad():
-        for X, Y, _, _ in dataloader:
-
-            X, Y = X.to(device), Y.to(device)
-
-            prediction = model(X)
-
-            batch_loss = criterion(prediction, Y)
-
-            loss += batch_loss.item()
-            r2   += compute_r2(Y, prediction)
-
-    loss /= len(dataloader)
-    r2   /= len(dataloader)
-
-    return loss, r2
-
-def save_training_plot(losses, r2_scores, epochs, dist_dir):
-    os.makedirs(dist_dir, exist_ok=True)
+    losses     = history.history['loss']
+    val_losses = history.history['val_loss']
+    r2_scores  = history.history['r2_score']
+    val_r2     = history.history['val_r2_score']
+    epochs     = range(len(losses))
 
     fig, axes = plt.subplots(
-        nrows=2,
-        ncols=1,
-        figsize=(10, 8),
-        sharex=True
+        nrows   = 2,
+        ncols   = 1,
+        figsize = (10, 8),
+        sharex  = True
     )
 
-    axes[0].scatter(range(epochs), losses, marker="x")
-    axes[0].set_title("Training Loss")
+    axes[0].plot(epochs, losses, label='Train Loss', marker="x")
+    axes[0].plot(epochs, val_losses, label='Val Loss', marker="o")
+    axes[0].set_title("Training and Validation Loss")
     axes[0].set_ylabel("Loss")
+    axes[0].legend()
     axes[0].grid()
 
-    axes[1].scatter(range(epochs), r2_scores, marker="x")
-    axes[1].set_title("Training R²")
+    axes[1].plot(epochs, r2_scores, label='Train R²', marker="x")
+    axes[1].plot(epochs, val_r2, label='Val R²', marker="o")
+    axes[1].set_title("Training and Validation R²")
     axes[1].set_xlabel("Epoch")
     axes[1].set_ylabel("R²")
+    axes[1].legend()
     axes[1].grid()
 
     plt.tight_layout()
 
     output = os.path.join(dist_dir, "training.png")
     plt.savefig(output)
+    plt.close()
 
     return output
 
@@ -277,42 +104,54 @@ def main():
     logger = setup_logger()
     config = load_config()
 
-    device = torch.device(
-        "cuda" if torch.cuda.is_available() else "cpu"
-    )
-
-    dataset = create_dataset(
+    train_seq, val_seq = create_sequences(
         config["data_folder"],
-        config["seed"]
-    )
-
-    train_loader, test_loader = create_dataloaders(
-        dataset,
         config["batch_size"],
         config["seed"]
     )
 
-    model = create_model(device)
+    model = create_model()
 
-    optimizer = torch.optim.Adam(model.parameters())
-    criterion = nn.MSELoss()
+    model.compile(
+        optimizer = tf.keras.optimizers.Adam(),
+        loss      = tf.keras.losses.MeanSquaredError(),
+        metrics   = [R2ScoreMetric()]
+    )
 
-    losses, r2_scores = train(
-        model,
-        train_loader,
-        test_loader,
-        optimizer,
-        criterion,
-        device,
-        config["epochs"],
-        config["dist_dir"],
-        logger
+    os.makedirs(config["dist_dir"], exist_ok = True)
+    checkpoint_path = os.path.join(config["dist_dir"], "best_model.keras")
+
+    callbacks = [
+        tf.keras.callbacks.EarlyStopping(
+            monitor              = 'val_r2_score',
+            mode                 = 'max',
+            patience             = 10,
+            min_delta            = 1e-3,
+            restore_best_weights = True,
+            verbose              = 1
+        ),
+        tf.keras.callbacks.ModelCheckpoint(
+            filepath       = checkpoint_path,
+            monitor        = 'val_r2_score',
+            mode           = 'max',
+            save_best_only = True,
+            verbose        = 1
+        ),
+        tf.keras.callbacks.CSVLogger(
+            os.path.join("logs", "training_history.csv")
+        )
+    ]
+
+    history = model.fit(
+        train_seq,
+        validation_data = val_seq,
+        epochs          = config["epochs"],
+        callbacks       = callbacks,
+        verbose         = 1
     )
 
     plot_path = save_training_plot(
-        losses,
-        r2_scores,
-        len(losses),
+        history,
         config["dist_dir"]
     )
 
