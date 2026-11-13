@@ -360,7 +360,7 @@ def save_best_and_worst_ecgs(
 
     for category, ecg_id in selected_ecgs:
 
-        sample_x, sample_y, exam_id = dataset[ecg_id]
+        sample_x, sample_y, exam_id, _ = dataset[ecg_id]
 
         with torch.no_grad():
 
